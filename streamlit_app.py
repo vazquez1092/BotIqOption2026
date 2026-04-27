@@ -18,6 +18,9 @@ if "api" not in st.session_state:
 if "conectado" not in st.session_state:
     st.session_state.conectado = False
 
+if "signals" not in st.session_state:
+    st.session_state.signals = {}
+
 # ---------------- SIDEBAR ----------------
 with st.sidebar:
     st.header("Configuración")
@@ -53,6 +56,22 @@ for i, par in enumerate(pares):
             "reloj": st.empty()
         })
 
+# ---------------- FUNCION INTELIGENTE OTC ----------------
+def obtener_velas(API, par):
+    velas = API.get_candles(par, 60, 50, time.time())
+
+    if velas:
+        return velas, par
+
+    # fallback OTC
+    par_otc = par + "-OTC"
+    velas = API.get_candles(par_otc, 60, 50, time.time())
+
+    if velas:
+        return velas, par_otc
+
+    return None, par
+
 # ---------------- LÓGICA ----------------
 if st.session_state.conectado and st.session_state.api:
 
@@ -66,62 +85,69 @@ if st.session_state.conectado and st.session_state.api:
     for ui in interfaces:
 
         try:
-            velas = API.get_candles(ui["par"], 60, 50, time.time())
-            nombre_activo = ui["par"]
-
-            if not velas:
-                nombre_activo = ui["par"] + "-OTC"
-                velas = API.get_candles(nombre_activo, 60, 50, time.time())
+            velas, nombre_activo = obtener_velas(API, ui["par"])
 
             if velas:
+
                 closes = [v['close'] for v in velas]
                 highs = [v['max'] for v in velas]
                 lows = [v['min'] for v in velas]
 
                 precio_actual = closes[-1]
 
-                # EMA 20
+                # EMA
                 ema20 = sum(closes[-20:]) / 20
 
-                # FIBO 0.618
+                # FIBO
                 max_h = max(highs[-20:])
                 min_l = min(lows[-20:])
                 f618 = max_h - ((max_h - min_l) * 0.618)
 
-                # VELA ACTUAL
-                vela_actual = velas[-1]
-                vela_alcista = vela_actual['close'] > vela_actual['open']
-                vela_bajista = vela_actual['close'] < vela_actual['open']
+                # VELA
+                vela = velas[-1]
+                alcista = vela['close'] > vela['open']
+                bajista = vela['close'] < vela['open']
 
                 # VOLATILIDAD
                 rango = max_h - min_l
                 volatilidad_ok = rango > 0.0005
 
-                ui["msg"].write(f"Modo: **{nombre_activo}**")
-
                 señal = None
 
-                # CONDICIONES SNIPER
                 if abs(precio_actual - f618) < 0.0001 and volatilidad_ok:
-
-                    if precio_actual > ema20 and vela_alcista:
+                    if precio_actual > ema20 and alcista:
                         señal = "CALL 🚀"
-
-                    elif precio_actual < ema20 and vela_bajista:
+                    elif precio_actual < ema20 and bajista:
                         señal = "PUT 🔻"
 
-                # RESULTADO
+                # ---------------- CACHE VISUAL (ANTI PARPADEO) ----------------
                 if señal:
+                    st.session_state.signals[ui["par"]] = {
+                        "señal": señal,
+                        "precio": precio_actual,
+                        "hora": ahora.strftime('%H:%M:%S'),
+                        "entrada": prox_v.strftime('%H:%M'),
+                        "activo": nombre_activo
+                    }
+
+                data = st.session_state.signals.get(ui["par"], None)
+
+                # ---------------- MOSTRAR ----------------
+                if data:
+                    ui["msg"].write(f"Modo: **{data['activo']}**")
+
                     ui["fibo"].metric(
                         "SNIPER SIGNAL",
-                        f"{precio_actual:.5f}",
-                        señal
+                        f"{data['precio']:.5f}",
+                        data["señal"]
                     )
 
                     ui["reloj"].error(
-                        f"🎯 {señal}\n🕒 {ahora.strftime('%H:%M:%S')}\n🔔 Entrada: {prox_v.strftime('%H:%M')}"
+                        f"🎯 {data['señal']}\n🕒 {data['hora']}\n🔔 Entrada: {data['entrada']}"
                     )
                 else:
+                    ui["msg"].write(f"Modo: **{nombre_activo}**")
+
                     ui["fibo"].metric(
                         "Sin señal",
                         f"{precio_actual:.5f}",
@@ -136,6 +162,6 @@ if st.session_state.conectado and st.session_state.api:
         except Exception as e:
             ui["msg"].error(f"Error: {str(e)}")
 
-    # 🔁 REFRESH CONTROLADO
-    time.sleep(2)
+    # 🔁 REFRESH SUAVE (SIN PARPADEO BRUSCO)
+    time.sleep(3)
     st.rerun()
