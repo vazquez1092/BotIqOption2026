@@ -1,4 +1,4 @@
 iqoptionapi
 pytz
 streamlit
-pandas
+git+https://github.com/Lu-Yi-Hsun/iqoptionapi.git
