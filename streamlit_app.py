@@ -5,11 +5,11 @@ import pytz
 from iqoptionapi.stable_api import IQ_Option
 
 # ---------------- CONFIG ----------------
-st.set_page_config(page_title="Scanner Fibo REAL - ARG", layout="wide")
+st.set_page_config(page_title="Scanner Institucional IQ", layout="wide")
 
 arg_tz = pytz.timezone('America/Argentina/Buenos_Aires')
 
-st.title("🚀 Scanner Fibo IQ: Modo SNIPER (Hora Argentina)")
+st.title("🏦 Scanner Institucional IQ Option (Sin Parpadeo)")
 
 # ---------------- SESSION ----------------
 if "api" not in st.session_state:
@@ -18,16 +18,20 @@ if "api" not in st.session_state:
 if "conectado" not in st.session_state:
     st.session_state.conectado = False
 
+if "running" not in st.session_state:
+    st.session_state.running = False
+
 if "signals" not in st.session_state:
     st.session_state.signals = {}
 
 # ---------------- SIDEBAR ----------------
 with st.sidebar:
     st.header("Configuración")
+
     email = st.text_input("Email")
     password = st.text_input("Contraseña", type="password")
 
-    if st.button("Conectar Mercado Real"):
+    if st.button("Conectar"):
         API = IQ_Option(email, password)
         check, reason = API.connect()
 
@@ -36,12 +40,18 @@ with st.sidebar:
             st.session_state.conectado = True
             st.success("✅ Conectado")
         else:
-            st.error(f"❌ Error: {reason}")
+            st.error(f"❌ {reason}")
 
-# ---------------- INTERFAZ ----------------
+    if st.session_state.conectado:
+        if st.button("▶ Iniciar Scanner"):
+            st.session_state.running = True
+
+        if st.button("⏹ Detener"):
+            st.session_state.running = False
+
+# ---------------- UI ----------------
 pares = ["EURUSD", "GBPUSD", "EURJPY", "AUDUSD"]
 
-st.write("---")
 cols = st.columns(4)
 
 interfaces = []
@@ -56,44 +66,45 @@ for i, par in enumerate(pares):
             "reloj": st.empty()
         })
 
-# ---------------- FUNCION INTELIGENTE OTC ----------------
-def obtener_velas(API, par):
-    velas = API.get_candles(par, 60, 50, time.time())
+# ---------------- FUNCIONES ----------------
+def obtener_par_activo(API, par):
+    try:
+        abiertos = API.get_all_open_time()
+        if abiertos["forex"][par]["open"]:
+            return par
+        else:
+            return par + "-OTC"
+    except:
+        return par + "-OTC"
 
-    if velas:
-        return velas, par
-
-    # fallback OTC
-    par_otc = par + "-OTC"
-    velas = API.get_candles(par_otc, 60, 50, time.time())
-
-    if velas:
-        return velas, par_otc
-
-    return None, par
-
-# ---------------- LÓGICA ----------------
-if st.session_state.conectado and st.session_state.api:
+# ---------------- LOOP PRINCIPAL ----------------
+if st.session_state.conectado and st.session_state.running:
 
     API = st.session_state.api
 
-    ahora = datetime.now(arg_tz)
+    while st.session_state.running:
 
-    minutos_restantes = 5 - (ahora.minute % 5)
-    prox_v = (ahora + timedelta(minutes=minutos_restantes)).replace(second=0, microsecond=0)
+        ahora = datetime.now(arg_tz)
 
-    for ui in interfaces:
+        minutos_restantes = 5 - (ahora.minute % 5)
+        prox_v = (ahora + timedelta(minutes=minutos_restantes)).replace(second=0, microsecond=0)
 
-        try:
-            velas, nombre_activo = obtener_velas(API, ui["par"])
+        for ui in interfaces:
 
-            if velas:
+            try:
+                par = ui["par"]
+                activo = obtener_par_activo(API, par)
+
+                velas = API.get_candles(activo, 60, 50, time.time())
+
+                if not velas:
+                    continue
 
                 closes = [v['close'] for v in velas]
                 highs = [v['max'] for v in velas]
                 lows = [v['min'] for v in velas]
 
-                precio_actual = closes[-1]
+                precio = closes[-1]
 
                 # EMA
                 ema20 = sum(closes[-20:]) / 20
@@ -114,54 +125,52 @@ if st.session_state.conectado and st.session_state.api:
 
                 señal = None
 
-                if abs(precio_actual - f618) < 0.0001 and volatilidad_ok:
-                    if precio_actual > ema20 and alcista:
+                if abs(precio - f618) < 0.0001 and volatilidad_ok:
+                    if precio > ema20 and alcista:
                         señal = "CALL 🚀"
-                    elif precio_actual < ema20 and bajista:
+                    elif precio < ema20 and bajista:
                         señal = "PUT 🔻"
 
-                # ---------------- CACHE VISUAL (ANTI PARPADEO) ----------------
+                # --------- GUARDAR SEÑAL ---------
                 if señal:
-                    st.session_state.signals[ui["par"]] = {
+                    st.session_state.signals[par] = {
                         "señal": señal,
-                        "precio": precio_actual,
+                        "precio": precio,
                         "hora": ahora.strftime('%H:%M:%S'),
                         "entrada": prox_v.strftime('%H:%M'),
-                        "activo": nombre_activo
+                        "activo": activo
                     }
 
-                data = st.session_state.signals.get(ui["par"], None)
+                data = st.session_state.signals.get(par)
 
-                # ---------------- MOSTRAR ----------------
+                # --------- MOSTRAR ---------
                 if data:
                     ui["msg"].write(f"Modo: **{data['activo']}**")
 
                     ui["fibo"].metric(
-                        "SNIPER SIGNAL",
+                        "SEÑAL ACTIVA",
                         f"{data['precio']:.5f}",
                         data["señal"]
                     )
 
-                    ui["reloj"].error(
-                        f"🎯 {data['señal']}\n🕒 {data['hora']}\n🔔 Entrada: {data['entrada']}"
+                    ui["reloj"].success(
+                        f"{data['señal']} | {data['hora']} | Entrada {data['entrada']}"
                     )
                 else:
-                    ui["msg"].write(f"Modo: **{nombre_activo}**")
+                    ui["msg"].write(f"Modo: **{activo}**")
 
                     ui["fibo"].metric(
                         "Sin señal",
-                        f"{precio_actual:.5f}",
+                        f"{precio:.5f}",
                         f"F618: {f618:.5f}",
                         delta_color="off"
                     )
 
                     ui["reloj"].info(
-                        f"⏳ {ahora.strftime('%H:%M:%S')}\nPróx: {prox_v.strftime('%H:%M')}"
+                        f"{ahora.strftime('%H:%M:%S')} | Próx {prox_v.strftime('%H:%M')}"
                     )
 
-        except Exception as e:
-            ui["msg"].error(f"Error: {str(e)}")
+            except Exception as e:
+                ui["msg"].error(str(e))
 
-    # 🔁 REFRESH SUAVE (SIN PARPADEO BRUSCO)
-    time.sleep(3)
-    st.rerun()
+        time.sleep(2)
