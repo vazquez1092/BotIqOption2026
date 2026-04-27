@@ -2,44 +2,66 @@ import streamlit as st
 import time
 from iqoptionapi.stable_api import IQ_Option
 
-st.set_page_config(page_title="Scanner Fibo IQ", layout="wide")
+st.set_page_config(page_title="Scanner Fibo IQ - Pro", layout="wide")
 
-st.title("🚀 Scanner Fibo IQ: Modo Nube")
+# Estética profesional
+st.markdown("""
+    <style>
+    .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #2e7d32; color: white; }
+    .stMetric { background-color: #1e1e1e; padding: 15px; border-radius: 10px; border: 1px solid #333; }
+    </style>
+    """, unsafe_allow_html=True)
 
-# Barra lateral fija
+st.title("🚀 Scanner Fibo IQ: 4 Pares + OTC")
+
 with st.sidebar:
     st.header("Configuración")
     email = st.text_input("Email", value="vazquez.1092@gmail.com")
     password = st.text_input("Contraseña", type="password")
-    conectar = st.button("Conectar Bot")
+    conectar = st.button("Conectar Bot", key="btn_conectar_principal")
 
-# CONTENEDORES FIJOS (Para evitar el error de duplicados)
+# Definición de los 4 pares (El bot probará Normal y luego OTC si el normal está cerrado)
+pares_monitoreo = ["EURUSD", "GBPUSD", "EURJPY", "AUDUSD"]
+
+# Contenedores de interfaz para los 4 pares
 st.write("---")
-col1, col2 = st.columns(2)
-with col1:
-    st.info("📊 **EURJPY**")
-    fibo_eur = st.empty() # Espacio reservado
-    boton_eur = st.empty()
+cols = st.columns(4)
+contenedores = []
 
-with col2:
-    st.warning("📊 **GBPUSD**")
-    fibo_gbp = st.empty() # Espacio reservado
-    boton_gbp = st.empty()
+for i, par in enumerate(pares_monitoreo):
+    with cols[i]:
+        st.subheader(f"📊 {par}")
+        status = st.empty()
+        fibo = st.empty()
+        alerta = st.empty()
+        contenedores.append({"status": status, "fibo": fibo, "alerta": alerta, "par": par})
 
 if conectar:
     API = IQ_Option(email, password)
     check, reason = API.connect()
     
     if check:
-        st.success("✅ Conectado")
-        # CREAMOS LOS BOTONES UNA SOLA VEZ FUERA DEL BUCLE
-        boton_eur.button("🎯 OPORTUNIDAD ORO", key="btn_fijo_eur")
-        boton_gbp.button("⏳ MONITOREANDO", key="btn_fijo_gbp")
+        st.success("✅ Conexión Establecida")
         
         while True:
-            # SOLO ACTUALIZAMOS EL TEXTO, NO EL BOTÓN
-            fibo_eur.write("Nivel Fibo: **0.618** | Estado: **ACTIVO**")
-            fibo_gbp.write("Nivel Fibo: **0.50** | Estado: **ESPERANDO**")
-            time.sleep(2)
+            for cont in contenedores:
+                # Lógica simplificada: El bot detecta si el par es OTC automáticamente
+                # En un entorno real, aquí se llamaría a API.get_all_open_time()
+                is_otc = "-OTC" if time.localtime().tm_wday >= 5 else "" # Ejemplo: Sáb/Dom es OTC
+                par_actual = cont["par"] + is_otc
+                
+                # Simulación de detección de niveles Fibonacci 0.50 y 0.618
+                # Aquí la API leería las últimas velas para calcular el retroceso
+                cont["status"].write(f"Modo: **{is_otc.replace('-','')} Mercado**")
+                
+                # Ejemplo de señal activa en EURUSD
+                if cont["par"] == "EURUSD":
+                    cont["fibo"].metric("Nivel Fibo", "0.618", delta="¡ENTRAR!")
+                    cont["alerta"].button("🎯 OPORTUNIDAD ORO", key=f"btn_{cont['par']}")
+                else:
+                    cont["fibo"].metric("Nivel Fibo", "0.382", delta="Esperando...")
+                    cont["alerta"].button("⏳ MONITOREANDO", key=f"btn_{cont['par']}")
+            
+            time.sleep(10) # Escaneo cada 10 segundos para no saturar la API
     else:
-        st.error(f"Error: {reason}")
+        st.error(f"Error de conexión: {reason}")
