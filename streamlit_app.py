@@ -78,39 +78,35 @@ if st.session_state.conectado and st.session_state.api:
 
         precio_actual = closes[-1]
 
-        # ---------------- EMA 20 ----------------
+        # EMA 20
         ema20 = sum(closes[-20:]) / 20
 
-        # ---------------- FIBO ----------------
+        # FIBO
         max_h = max(highs[-20:])
         min_l = min(lows[-20:])
         f618 = max_h - ((max_h - min_l) * 0.618)
 
-        # ---------------- VELA ACTUAL ----------------
+        # VELA ACTUAL
         vela_actual = velas[-1]
         vela_alcista = vela_actual['close'] > vela_actual['open']
         vela_bajista = vela_actual['close'] < vela_actual['open']
 
-        # ---------------- VOLATILIDAD ----------------
+        # VOLATILIDAD
         rango = max_h - min_l
-        volatilidad_ok = rango > 0.0005  # ajustar según activo
+        volatilidad_ok = rango > 0.0005
 
         ui["msg"].write(f"Modo: **{nombre_activo}**")
 
         señal = None
 
-        # ---------------- CONDICIONES SNIPER ----------------
         if abs(precio_actual - f618) < 0.0001 and volatilidad_ok:
 
-            # CALL
             if precio_actual > ema20 and vela_alcista:
                 señal = "CALL 🚀"
 
-            # PUT
             elif precio_actual < ema20 and vela_bajista:
                 señal = "PUT 🔻"
 
-        # ---------------- MOSTRAR RESULTADO ----------------
         if señal:
             ui["fibo"].metric(
                 "SNIPER SIGNAL",
