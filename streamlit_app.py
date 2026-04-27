@@ -6,18 +6,19 @@ import pandas as pd
 from iqoptionapi.stable_api import IQ_Option
 
 # --- CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(page_title="Scanner PRO v2 - MultiPar", layout="wide")
+st.set_page_config(page_title="Scanner PRO v2 - 10 Pares", layout="wide")
 arg_tz = pytz.timezone('America/Argentina/Buenos_Aires')
 
-# Estilo para mejorar la interfaz oscura
+# Estilos CSS para la interfaz
 st.markdown("""
     <style>
-    .stSuccess { background-color: #052e16; color: #4ade80; border: 1px solid #22c55e; }
-    .stWarning { background-color: #2e2a05; color: #facc15; }
+    .stMetric { background-color: #1e1e1e; padding: 10px; border-radius: 10px; }
+    .stSuccess { background-color: #052e16; color: #4ade80; }
+    .stError { background-color: #450a0a; color: #f87171; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- ESTADO DE SESIÓN ---
+# --- ESTADO DE SESIÓN (Persistencia de conexión) ---
 if "api" not in st.session_state:
     st.session_state.api = None
 if "conectado" not in st.session_state:
@@ -30,7 +31,7 @@ with st.sidebar:
     password = st.text_input("Contraseña", type="password")
     
     if st.button("🚀 Iniciar Scanner", use_container_width=True):
-        with st.spinner("Conectando..."):
+        with st.spinner("Conectando con el servidor..."):
             API = IQ_Option(email, password)
             check, reason = API.connect()
             if check:
@@ -38,102 +39,98 @@ with st.sidebar:
                 st.session_state.conectado = True
                 st.success("¡Conexión Exitosa!")
             else:
-                st.error(f"Error: {reason}")
+                st.error(f"Error de conexión: {reason}")
 
-# --- FUNCIONES TÉCNICAS ---
-def obtener_activo_abierto(api, par):
-    """Detecta si el par está en mercado real o debe usar OTC"""
+# --- LÓGICA TÉCNICA ---
+def obtener_activo_disponible(api, par):
+    """Detecta si el mercado real está abierto o usa OTC"""
     try:
-        # Verificamos disponibilidad en mercado digital/turbo
-        all_asset = api.get_all_profit()
-        if par in all_asset.get('turbo', {}):
+        profits = api.get_all_profit()
+        # Si el par no tiene profit en mercado real, es que está cerrado
+        if par in profits.get('turbo', {}):
             return par
-        else:
-            return par + "-OTC"
+        return f"{par}-OTC"
     except:
-        return par + "-OTC"
+        return f"{par}-OTC"
 
 def calcular_indicadores(velas):
-    """Calcula Fibo 0.618, RSI y EMA20"""
+    """Cálculo de Fibonacci 0.618, RSI y tendencia"""
     df = pd.DataFrame(velas)
-    closes = df['close']
-    
-    # EMA 20
-    ema = closes.ewm(span=20, adjust=False).mean().iloc[-1]
+    df['close'] = df['close'].astype(float)
     
     # Fibonacci 0.618 de las últimas 20 velas
     max_h = df['max'].tail(20).max()
     min_l = df['min'].tail(20).min()
-    f618 = max_h - ((max_h - min_l) * 0.618)
+    fibo_618 = max_h - ((max_h - min_l) * 0.618)
     
-    # RSI 14
-    delta = closes.diff()
+    # RSI (14 periodos)
+    delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
     rsi = 100 - (100 / (1 + rs.iloc[-1]))
     
-    return closes.iloc[-1], f618, rsi, ema
+    return df['close'].iloc[-1], fibo_618, rsi
 
-# --- DASHBOARD PRINCIPAL ---
-st.title("🎯 Dashboard de Señales Fibonacci + RSI (10 Pares)")
+# --- PANEL CENTRAL ---
+st.title("📊 Dashboard de Señales Fibonacci + RSI (10 Pares)")
 
 if st.session_state.conectado:
-    # Lista de 10 pares solicitados
-    lista_pares = [
-        "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD",
-        "EURJPY", "GBPJPY", "EURGBP", "AUDJPY", "GBPCHF"
-    ]
+    lista_pares = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", 
+                   "EURJPY", "GBPJPY", "EURGBP", "AUDJPY", "GBPCHF"]
     
+    # Contenedor dinámico para evitar que el reloj se congele
     placeholder = st.empty()
     
     while True:
-        # Verificar conexión
-        if not st.session_state.api.check_connect():
-            st.session_state.api.connect()
+        try:
+            # 1. Sistema de reconexión automática (Evita el error de WebSocket)
+            if not st.session_state.api.check_connect():
+                st.session_state.api.connect()
+                time.sleep(1)
 
-        ahora = datetime.now(arg_tz)
-        prox_v = (ahora + timedelta(minutes=1)).replace(second=0, microsecond=0)
-        
-        with placeholder.container():
-            # Encabezado con hora de Junín
-            c1, c2 = st.columns(2)
-            c1.metric("🕒 Hora (Junín)", ahora.strftime("%H:%M:%S"))
-            c2.info(f"⌛ Próxima Vela: {prox_v.strftime('%H:%M:%S')}")
-            
-            st.divider()
-            
-            # Grid de 2 columnas para los 10 pares
-            cols = st.columns(2)
-            
-            for i, par_base in enumerate(lista_pares):
-                with cols[i % 2]:
-                    # 1. Detectar si es mercado Real u OTC
-                    activo = obtener_activo_abierto(st.session_state.api, par_base)
-                    
-                    # 2. Pedir velas (60 seg, 50 velas)
-                    velas = st.session_state.api.get_candles(activo, 60, 50, time.time())
-                    
-                    if velas:
-                        precio, f618, rsi, ema = calcular_indicadores(velas)
+            ahora = datetime.now(arg_tz)
+            prox_v = (ahora + timedelta(minutes=1)).replace(second=0, microsecond=0)
+
+            with placeholder.container():
+                c1, c2 = st.columns(2)
+                c1.metric("🕒 Hora (Junín)", ahora.strftime("%H:%M:%S"))
+                c2.info(f"⌛ Próxima Vela: {prox_v.strftime('%H:%M:%S')}")
+                
+                st.divider()
+                
+                # Crear grid de 2 columnas para los 10 pares
+                grid = st.columns(2)
+                
+                for i, par_base in enumerate(lista_pares):
+                    with grid[i % 2]:
+                        activo = obtener_activo_disponible(st.session_state.api, par_base)
                         
-                        # 3. Lógica de Señal
-                        señal = None
-                        # Margen de 0.0003 para Fibo
-                        if abs(precio - f618) < 0.0003:
-                            if precio > ema and rsi < 45:
-                                señal = "COMPRA (CALL) 🚀"
-                            elif precio < ema and rsi > 55:
-                                señal = "VENTA (PUT) 🔻"
+                        # Pedir velas de 1 minuto
+                        velas = st.session_state.api.get_candles(activo, 60, 40, time.time())
                         
-                        # 4. Mostrar en pantalla
-                        if señal:
-                            st.success(f"**{activo}** | {señal}\n\nEntrada: {prox_v.strftime('%H:%M')}")
+                        if velas:
+                            precio, f618, rsi = calcular_indicadores(velas)
+                            
+                            # Lógica de señal
+                            distancia = abs(precio - f618)
+                            
+                            if distancia < 0.0002: # Proximidad al nivel Fibo
+                                if rsi < 35:
+                                    st.success(f"🔥 **{activo}**: COMPRA (CALL) | RSI: {round(rsi,1)}")
+                                elif rsi > 65:
+                                    st.error(f"🔻 **{activo}**: VENTA (PUT) | RSI: {round(rsi,1)}")
+                                else:
+                                    st.warning(f"⚖️ **{activo}**: Nivel Fibo tocado, esperando RSI...")
+                            else:
+                                st.write(f"🔎 {activo}: Buscando entrada... (Precio: {round(precio,5)})")
                         else:
-                            st.write(f"🔎 {activo}: Buscando entrada... (P: {round(precio,5)} | F618: {round(f618,5)})")
-                    else:
-                        st.warning(f"⚠️ {activo}: Sin datos.")
+                            st.write(f"⚠️ {activo}: Conectando datos...")
 
-        time.sleep(5) # Pausa para no saturar la API
+            time.sleep(2) # Pausa para refrescar datos sin saturar
+            
+        except Exception as e:
+            st.error(f"Error de conexión: {e}")
+            time.sleep(5)
 else:
-    st.info("👈 Ingresá tus credenciales y dale a 'Iniciar Scanner' para arrancar.")
+    st.info("👈 Por favor, ingresá tus credenciales en el panel izquierdo para comenzar el monitoreo.")
