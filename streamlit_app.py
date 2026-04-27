@@ -5,11 +5,11 @@ import pytz
 from iqoptionapi.stable_api import IQ_Option
 
 # ---------------- CONFIG ----------------
-st.set_page_config(page_title="Scanner Institucional IQ", layout="wide")
+st.set_page_config(page_title="Scanner Fibo Pro", layout="wide")
 
 arg_tz = pytz.timezone('America/Argentina/Buenos_Aires')
 
-st.title("🏦 Scanner Institucional IQ Option (Sin Parpadeo)")
+st.title("🎯 Scanner PRO - Señales Reales")
 
 # ---------------- SESSION ----------------
 if "api" not in st.session_state:
@@ -18,16 +18,12 @@ if "api" not in st.session_state:
 if "conectado" not in st.session_state:
     st.session_state.conectado = False
 
-if "running" not in st.session_state:
-    st.session_state.running = False
-
 if "signals" not in st.session_state:
-    st.session_state.signals = {}
+    st.session_state.signals = []
 
 # ---------------- SIDEBAR ----------------
 with st.sidebar:
     st.header("Configuración")
-
     email = st.text_input("Email")
     password = st.text_input("Contraseña", type="password")
 
@@ -40,34 +36,16 @@ with st.sidebar:
             st.session_state.conectado = True
             st.success("✅ Conectado")
         else:
-            st.error(f"❌ {reason}")
+            st.error(reason)
 
-    if st.session_state.conectado:
-        if st.button("▶ Iniciar Scanner"):
-            st.session_state.running = True
-
-        if st.button("⏹ Detener"):
-            st.session_state.running = False
-
-# ---------------- UI ----------------
-pares = ["EURUSD", "GBPUSD", "EURJPY", "AUDUSD"]
-
-cols = st.columns(4)
-
-interfaces = []
-
-for i, par in enumerate(pares):
-    with cols[i]:
-        st.subheader(f"📊 {par}")
-        interfaces.append({
-            "par": par,
-            "msg": st.empty(),
-            "fibo": st.empty(),
-            "reloj": st.empty()
-        })
+# ---------------- PARES ----------------
+pares = [
+    "EURUSD","GBPUSD","USDJPY","AUDUSD","USDCAD",
+    "EURJPY","GBPJPY","EURGBP","AUDJPY","GBPCHF"
+]
 
 # ---------------- FUNCIONES ----------------
-def obtener_par_activo(API, par):
+def get_par(API, par):
     try:
         abiertos = API.get_all_open_time()
         if abiertos["forex"][par]["open"]:
@@ -77,24 +55,43 @@ def obtener_par_activo(API, par):
     except:
         return par + "-OTC"
 
-# ---------------- LOOP PRINCIPAL ----------------
-if st.session_state.conectado and st.session_state.running:
+def calcular_rsi(closes, period=14):
+    gains = []
+    losses = []
+
+    for i in range(1, len(closes)):
+        diff = closes[i] - closes[i-1]
+        if diff >= 0:
+            gains.append(diff)
+            losses.append(0)
+        else:
+            gains.append(0)
+            losses.append(abs(diff))
+
+    avg_gain = sum(gains[-period:]) / period
+    avg_loss = sum(losses[-period:]) / period if sum(losses[-period:]) != 0 else 1
+
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+# ---------------- SCANNER ----------------
+if st.session_state.conectado:
 
     API = st.session_state.api
 
-    while st.session_state.running:
+    placeholder = st.empty()
+
+    while True:
+
+        señales = []
 
         ahora = datetime.now(arg_tz)
+        prox_v = (ahora + timedelta(minutes=1)).replace(second=0, microsecond=0)
 
-        minutos_restantes = 5 - (ahora.minute % 5)
-        prox_v = (ahora + timedelta(minutes=minutos_restantes)).replace(second=0, microsecond=0)
-
-        for ui in interfaces:
+        for par in pares:
 
             try:
-                par = ui["par"]
-                activo = obtener_par_activo(API, par)
-
+                activo = get_par(API, par)
                 velas = API.get_candles(activo, 60, 50, time.time())
 
                 if not velas:
@@ -107,70 +104,59 @@ if st.session_state.conectado and st.session_state.running:
                 precio = closes[-1]
 
                 # EMA
-                ema20 = sum(closes[-20:]) / 20
+                ema = sum(closes[-20:]) / 20
 
                 # FIBO
                 max_h = max(highs[-20:])
                 min_l = min(lows[-20:])
                 f618 = max_h - ((max_h - min_l) * 0.618)
 
+                # RSI
+                rsi = calcular_rsi(closes)
+
                 # VELA
                 vela = velas[-1]
                 alcista = vela['close'] > vela['open']
                 bajista = vela['close'] < vela['open']
 
-                # VOLATILIDAD
-                rango = max_h - min_l
-                volatilidad_ok = rango > 0.0005
-
                 señal = None
 
-                if abs(precio - f618) < 0.0001 and volatilidad_ok:
-                    if precio > ema20 and alcista:
+                # ----------- ESTRATEGIA COMBINADA -----------
+                if abs(precio - f618) < 0.0001:
+
+                    # CALL
+                    if precio > ema and alcista and rsi < 35:
                         señal = "CALL 🚀"
-                    elif precio < ema20 and bajista:
+
+                    # PUT
+                    elif precio < ema and bajista and rsi > 65:
                         señal = "PUT 🔻"
 
-                # --------- GUARDAR SEÑAL ---------
                 if señal:
-                    st.session_state.signals[par] = {
+                    señales.append({
+                        "par": activo,
                         "señal": señal,
                         "precio": precio,
                         "hora": ahora.strftime('%H:%M:%S'),
-                        "entrada": prox_v.strftime('%H:%M'),
-                        "activo": activo
-                    }
+                        "entrada": prox_v.strftime('%H:%M')
+                    })
 
-                data = st.session_state.signals.get(par)
+            except:
+                continue
 
-                # --------- MOSTRAR ---------
-                if data:
-                    ui["msg"].write(f"Modo: **{data['activo']}**")
+        # ---------------- MOSTRAR SOLO SEÑALES ----------------
+        with placeholder.container():
 
-                    ui["fibo"].metric(
-                        "SEÑAL ACTIVA",
-                        f"{data['precio']:.5f}",
-                        data["señal"]
+            st.subheader("📡 Señales Detectadas")
+
+            if señales:
+                for s in señales:
+                    st.success(
+                        f"{s['par']} | {s['señal']} | Precio: {round(s['precio'],5)}\n"
+                        f"🕒 Señal: {s['hora']} | 🎯 Entrada: {s['entrada']}\n"
+                        f"⚠️ MG1 opcional"
                     )
+            else:
+                st.info("Esperando señales...")
 
-                    ui["reloj"].success(
-                        f"{data['señal']} | {data['hora']} | Entrada {data['entrada']}"
-                    )
-                else:
-                    ui["msg"].write(f"Modo: **{activo}**")
-
-                    ui["fibo"].metric(
-                        "Sin señal",
-                        f"{precio:.5f}",
-                        f"F618: {f618:.5f}",
-                        delta_color="off"
-                    )
-
-                    ui["reloj"].info(
-                        f"{ahora.strftime('%H:%M:%S')} | Próx {prox_v.strftime('%H:%M')}"
-                    )
-
-            except Exception as e:
-                ui["msg"].error(str(e))
-
-        time.sleep(2)
+        time.sleep(5)
