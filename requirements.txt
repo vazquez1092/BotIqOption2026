@@ -1,3 +1,4 @@
-streamlit
+iqoptionapi
 pandas
-iqoptionapi @ git+https://github.com/Lu-Yi-Hsun/iqoptionapi.git
+pytz
+streamlit
