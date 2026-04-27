@@ -5,15 +5,15 @@ import pytz
 import pandas as pd
 from iqoptionapi.stable_api import IQ_Option
 
-# --- CONFIGURACIÓN INICIAL ---
-st.set_page_config(page_title="Scanner PRO v2", layout="wide", initial_sidebar_state="expanded")
+# --- CONFIGURACIÓN DE PÁGINA ---
+st.set_page_config(page_title="Scanner PRO v2 - MultiPar", layout="wide")
 arg_tz = pytz.timezone('America/Argentina/Buenos_Aires')
 
-# Estilo personalizado para mejorar la visibilidad
+# Estilo para mejorar la interfaz oscura
 st.markdown("""
     <style>
-    .reportview-container { background: #0e1117; }
     .stSuccess { background-color: #052e16; color: #4ade80; border: 1px solid #22c55e; }
+    .stWarning { background-color: #2e2a05; color: #facc15; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -23,14 +23,14 @@ if "api" not in st.session_state:
 if "conectado" not in st.session_state:
     st.session_state.conectado = False
 
-# --- SIDEBAR ---
+# --- SIDEBAR (LOGIN) ---
 with st.sidebar:
     st.header("🔑 Acceso IQ Option")
     email = st.text_input("Email", value="vazquez.1092@gmail.com")
     password = st.text_input("Contraseña", type="password")
     
     if st.button("🚀 Iniciar Scanner", use_container_width=True):
-        with st.spinner("Conectando con el servidor..."):
+        with st.spinner("Conectando..."):
             API = IQ_Option(email, password)
             check, reason = API.connect()
             if check:
@@ -40,84 +40,100 @@ with st.sidebar:
             else:
                 st.error(f"Error: {reason}")
 
-# --- LÓGICA DE TRADING ---
-def get_candles_safe(api, par):
-    """Obtiene velas manejando fallos de conexión"""
+# --- FUNCIONES TÉCNICAS ---
+def obtener_activo_abierto(api, par):
+    """Detecta si el par está en mercado real o debe usar OTC"""
     try:
-        # Intenta primero mercado real, luego OTC
-        velas = api.get_candles(par, 60, 50, time.time())
-        if not velas:
-            velas = api.get_candles(par + "-OTC", 60, 50, time.time())
-        return velas
+        # Verificamos disponibilidad en mercado digital/turbo
+        all_asset = api.get_all_profit()
+        if par in all_asset.get('turbo', {}):
+            return par
+        else:
+            return par + "-OTC"
     except:
-        return None
+        return par + "-OTC"
 
-def analizar_señal(velas):
-    """Calcula indicadores y genera señales"""
+def calcular_indicadores(velas):
+    """Calcula Fibo 0.618, RSI y EMA20"""
     df = pd.DataFrame(velas)
     closes = df['close']
-    highs = df['max']
-    lows = df['min']
     
-    # Indicadores
-    ema20 = closes.ewm(span=20, adjust=False).mean().iloc[-1]
-    max_20 = highs.tail(20).max()
-    min_20 = lows.tail(20).min()
-    f618 = max_20 - ((max_20 - min_20) * 0.618)
-    precio_actual = closes.iloc[-1]
+    # EMA 20
+    ema = closes.ewm(span=20, adjust=False).mean().iloc[-1]
     
-    # RSI rápido
+    # Fibonacci 0.618 de las últimas 20 velas
+    max_h = df['max'].tail(20).max()
+    min_l = df['min'].tail(20).min()
+    f618 = max_h - ((max_h - min_l) * 0.618)
+    
+    # RSI 14
     delta = closes.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
     rsi = 100 - (100 / (1 + rs.iloc[-1]))
     
-    # Lógica de entrada
-    if abs(precio_actual - f618) < (precio_actual * 0.0001): # Margen dinámico
-        if precio_actual > ema20 and rsi < 45:
-            return "COMPRA (CALL) 🚀"
-        elif precio_actual < ema20 and rsi > 55:
-            return "VENTA (PUT) 🔻"
-    return None
+    return closes.iloc[-1], f618, rsi, ema
 
-# --- CUERPO PRINCIPAL ---
-st.title("🎯 Dashboard de Señales Fibonacci + RSI")
+# --- DASHBOARD PRINCIPAL ---
+st.title("🎯 Dashboard de Señales Fibonacci + RSI (10 Pares)")
 
 if st.session_state.conectado:
-    pares = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "EURJPY", "GBPJPY"]
+    # Lista de 10 pares solicitados
+    lista_pares = [
+        "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD",
+        "EURJPY", "GBPJPY", "EURGBP", "AUDJPY", "GBPCHF"
+    ]
+    
     placeholder = st.empty()
     
     while True:
+        # Verificar conexión
         if not st.session_state.api.check_connect():
             st.session_state.api.connect()
 
         ahora = datetime.now(arg_tz)
-        prox_entrada = (ahora + timedelta(minutes=1)).replace(second=0, microsecond=0)
+        prox_v = (ahora + timedelta(minutes=1)).replace(second=0, microsecond=0)
         
         with placeholder.container():
-            col1, col2 = st.columns([1, 3])
-            col1.metric("Hora Local (Junín)", ahora.strftime("%H:%M:%S"))
-            col2.info(f"Siguiente vela operativa: {prox_entrada.strftime('%H:%M:%S')}")
+            # Encabezado con hora de Junín
+            c1, c2 = st.columns(2)
+            c1.metric("🕒 Hora (Junín)", ahora.strftime("%H:%M:%S"))
+            c2.info(f"⌛ Próxima Vela: {prox_v.strftime('%H:%M:%S')}")
             
             st.divider()
             
-            # Grid de señales
-            grid = st.columns(3)
-            idx = 0
+            # Grid de 2 columnas para los 10 pares
+            cols = st.columns(2)
             
-            for par in pares:
-                velas = get_candles_safe(st.session_state.api, par)
-                if velas:
-                    resultado = analizar_señal(velas)
-                    if resultado:
-                        with grid[idx % 3]:
-                            st.success(f"**{par}**\n\n{resultado}\n\nEntrada: {prox_entrada.strftime('%H:%M')}")
-                        idx += 1
-            
-            if idx == 0:
-                st.write("🔎 Monitoreando mercados... Sin señales confirmadas.")
-        
-        time.sleep(2) # Actualización más rápida para scalping
+            for i, par_base in enumerate(lista_pares):
+                with cols[i % 2]:
+                    # 1. Detectar si es mercado Real u OTC
+                    activo = obtener_activo_abierto(st.session_state.api, par_base)
+                    
+                    # 2. Pedir velas (60 seg, 50 velas)
+                    velas = st.session_state.api.get_candles(activo, 60, 50, time.time())
+                    
+                    if velas:
+                        precio, f618, rsi, ema = calcular_indicadores(velas)
+                        
+                        # 3. Lógica de Señal
+                        señal = None
+                        # Margen de 0.0003 para Fibo
+                        if abs(precio - f618) < 0.0003:
+                            if precio > ema and rsi < 45:
+                                señal = "COMPRA (CALL) 🚀"
+                            elif precio < ema and rsi > 55:
+                                señal = "VENTA (PUT) 🔻"
+                        
+                        # 4. Mostrar en pantalla
+                        if señal:
+                            st.success(f"**{activo}** | {señal}\n\nEntrada: {prox_v.strftime('%H:%M')}")
+                        else:
+                            st.write(f"🔎 {activo}: Buscando entrada... (P: {round(precio,5)} | F618: {round(f618,5)})")
+                    else:
+                        st.warning(f"⚠️ {activo}: Sin datos.")
+
+        time.sleep(5) # Pausa para no saturar la API
 else:
-    st.warning("👈 Por favor, ingresa tus credenciales en el panel lateral para comenzar.")
+    st.info("👈 Ingresá tus credenciales y dale a 'Iniciar Scanner' para arrancar.")
