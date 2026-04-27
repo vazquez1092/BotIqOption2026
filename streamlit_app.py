@@ -3,84 +3,78 @@ import time
 from datetime import datetime, timedelta
 from iqoptionapi.stable_api import IQ_Option
 
+# Configuración de página
 st.set_page_config(page_title="Scanner Fibo REAL", layout="wide")
 
-# Estética y CSS
 st.markdown("""
     <style>
-    .stButton>button { width: 100%; border-radius: 5px; background-color: #2e7d32; color: white; }
-    .stMetric { background-color: #1e1e1e; padding: 10px; border-radius: 10px; border: 1px solid #333; }
+    .stMetric { background-color: #1e1e1e; padding: 15px; border-radius: 10px; border: 1px solid #333; }
+    .css-1kyx60w { font-size: 1.5rem; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🚀 Scanner Fibo IQ: SEÑALES REALES")
+st.title("🚀 Scanner Fibo IQ: Señales en Tiempo Real")
 
+# Sidebar
 with st.sidebar:
     st.header("Configuración")
     email = st.text_input("Email", value="vazquez.1092@gmail.com")
     password = st.text_input("Contraseña", type="password")
-    conectar = st.button("Conectar Bot Real")
+    conectar = st.button("Conectar Mercado Real")
 
+# Estructura de 4 columnas
 pares = ["EURUSD", "GBPUSD", "EURJPY", "AUDUSD"]
-
-# Espacios en la interfaz
 st.write("---")
 cols = st.columns(4)
-contenedores = []
+interfaces = []
+
 for i, par in enumerate(pares):
     with cols[i]:
         st.subheader(f"📊 {par}")
-        fibo_val = st.empty()
-        timer_val = st.empty()
-        btn_val = st.empty()
-        contenedores.append({"fibo": fibo_val, "timer": timer_val, "btn": btn_val, "par": par})
-
-def calcular_fibo(velas):
-    # Lógica Real: Máximo y Mínimo de las últimas 20 velas
-    highs = [v['max'] for v in velas]
-    lows = [v['min'] for v in velas]
-    precio_actual = velas[-1]['close']
-    
-    max_h, min_l = max(highs), min(lows)
-    diff = max_h - min_l
-    
-    # Nivel 61.8%
-    nivel_618 = max_h - (diff * 0.618)
-    return precio_actual, nivel_618
+        interfaces.append({
+            "par": par,
+            "msg": st.empty(),
+            "fibo": st.empty(),
+            "reloj": st.empty()
+        })
 
 if conectar:
     API = IQ_Option(email, password)
     check, reason = API.connect()
     
     if check:
-        st.success("✅ Conectado al Mercado Real")
+        st.success("✅ Conectado a IQ Option")
         while True:
             ahora = datetime.now()
-            prox_vela = (ahora + timedelta(minutes=5 - ahora.minute % 5)).replace(second=0, microsecond=0)
+            # Próxima vela (ejemplo a 5 min)
+            prox_v = (ahora + timedelta(minutes=5 - ahora.minute % 5)).replace(second=0, microsecond=0)
             
-            for cont in contenedores:
-                # El bot intenta mercado normal, si falla va a OTC
-                simbolo = cont["par"]
-                velas = API.get_candles(simbolo, 60, 20, time.time())
-                
-                if not velas: # Intento modo OTC
-                    simbolo = cont["par"] + "-OTC"
-                    velas = API.get_candles(simbolo, 60, 20, time.time())
+            for ui in interfaces:
+                # Intento Mercado Real, si no, OTC
+                velas = API.get_candles(ui["par"], 60, 20, time.time())
+                nombre_activo = ui["par"]
+                if not velas:
+                    nombre_activo = ui["par"] + "-OTC"
+                    velas = API.get_candles(nombre_activo, 60, 20, time.time())
 
                 if velas:
-                    precio, f618 = calcular_fibo(velas)
-                    distancia = abs(precio - f618)
+                    precios = [v['close'] for v in velas]
+                    max_h, min_l = max([v['max'] for v in velas]), min([v['min'] for v in velas])
+                    precio_actual = precios[-1]
+                    f618 = max_h - ((max_h - min_l) * 0.618)
                     
-                    # Si el precio está muy cerca del nivel (0.618)
-                    if distancia < 0.0001:
-                        cont["fibo"].metric(f"{simbolo}", f"{precio:.5f}", delta="🎯 NIVEL 0.618")
-                        cont["timer"].write(f"🔔 Entrada: **{prox_vela.strftime('%H:%M')}**")
-                        cont["btn"].button("🎯 ENTRAR YA", key=f"run_{simbolo}")
+                    ui["msg"].write(f"Modo: **{nombre_activo}**")
+                    
+                    # Lógica de señal real
+                    if abs(precio_actual - f618) < 0.0001:
+                        ui["fibo"].metric("NIVEL 0.618", f"{precio_actual:.5f}", "🎯 ¡ENTRAR YA!", delta_color="normal")
+                        ui["reloj"].error(f"🕒 Señal: {ahora.strftime('%H:%M:%S')}\n\n🔔 Entrada: {prox_v.strftime('%H:%M')}")
                     else:
-                        cont["fibo"].metric(f"{simbolo}", f"{precio:.5f}", delta=f"Fibo: {f618:.5f}", delta_color="off")
-                        cont["timer"].write("⏳ Buscando punto...")
-                        cont["btn"].button("⏳ ESCANEANDO", key=f"wait_{simbolo}")
-                
-            time.sleep(2) # Escaneo rápido
+                        ui["fibo"].metric("Buscando Fibo", f"{precio_actual:.5f}", f"F618: {f618:.5f}", delta_color="off")
+                        ui["reloj"].info(f"⏳ Próxima Vela: {prox_v.strftime('%H:%M:%S')}")
+                else:
+                    ui["msg"].warning("Activo Cerrado")
+            
+            time.sleep(2) # Respiro para el servidor
     else:
         st.error(f"Error: {reason}")
